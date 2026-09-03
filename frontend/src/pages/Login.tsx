@@ -1,10 +1,12 @@
 import React, { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate, Link, useSearchParams } from 'react-router-dom';
 import { api } from '../utils/api';
 import { ShieldCheck, Phone, KeyRound, ArrowRight, Loader2, Bot, Lock } from 'lucide-react';
 
 export const Login: React.FC = () => {
   const navigate = useNavigate();
+  const [params] = useSearchParams();
+  const expired = params.get('expired') === '1';
   const [phone, setPhone] = useState('595981123456');
   const [otp, setOtp] = useState('');
   const [pin, setPin] = useState('8492');
@@ -69,6 +71,12 @@ export const Login: React.FC = () => {
           <h2 className="text-2xl font-black text-white tracking-tight">Acceso a Tu Bio-Pass</h2>
           <p className="text-xs text-slate-400 mt-1">Inicia sesión con tu Teléfono Maestro y tu PIN de Seguridad</p>
         </div>
+
+        {expired && !error && (
+          <div className="p-3 rounded-xl bg-amber-950/40 border border-amber-500/30 text-xs text-amber-300 text-center">
+            Tu sesión expiró. Iniciá sesión de nuevo.
+          </div>
+        )}
 
         {error && (
           <div className="p-3 rounded-xl bg-rose-950/50 border border-rose-500/40 text-xs text-rose-300 text-center">

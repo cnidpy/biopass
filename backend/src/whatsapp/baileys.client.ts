@@ -1,6 +1,8 @@
 import makeWASocket, {
   DisconnectReason,
   useMultiFileAuthState,
+  fetchLatestBaileysVersion,
+  Browsers,
   WASocket,
   proto,
   downloadMediaMessage,
@@ -35,15 +37,30 @@ export class BaileysClient {
 
       const { state, saveCreds } = await useMultiFileAuthState(authDir);
 
-      const logger = pino({ level: 'silent' });
+      // WHATSAPP_LOG_LEVEL=debug|info|warn|error|silent (default: warn, to surface pairing failures)
+      const logger = pino({ level: process.env.WHATSAPP_LOG_LEVEL || 'warn' });
+
+      // Announce the CURRENT WhatsApp Web protocol version — WhatsApp servers
+      // terminate connections that claim an outdated version ("Connection Terminated by Server").
+      let version: [number, number, number] | undefined;
+      try {
+        const res = await fetchLatestBaileysVersion();
+        version = res.version;
+        console.log(`📲 [WHATSAPP BOT] Using WA Web version ${version.join('.')}${res.isLatest ? ' (latest)' : ''}`);
+      } catch (e: any) {
+        console.warn('⚠️ [WHATSAPP BOT] Could not fetch latest WA version, using bundled default:', e?.message);
+      }
 
       this.sock = makeWASocket({
+        version,
         auth: state,
         logger,
-        browser: ['Doorway Cortex Bio-Pass', 'Chrome', '1.0.0'],
+        browser: Browsers.ubuntu('Chrome'),
         qrTimeout: 60_000,
-        connectTimeoutMs: 30_000,
+        connectTimeoutMs: 60_000,
+        keepAliveIntervalMs: 15_000,
         markOnlineOnConnect: false,
+        syncFullHistory: false,
       });
 
       this.sock.ev.on('creds.update', saveCreds);
@@ -61,9 +78,13 @@ export class BaileysClient {
         }
 
         if (connection === 'close') {
-          const statusCode = (lastDisconnect?.error as any)?.output?.statusCode;
+          const err = lastDisconnect?.error as any;
+          const statusCode = err?.output?.statusCode;
           const loggedOut = statusCode === DisconnectReason.loggedOut;
-          this.lastError = (lastDisconnect?.error as any)?.message || `close (${statusCode ?? 'unknown'})`;
+          this.lastError = `${err?.message || 'close'} [${statusCode ?? 'unknown'}]`;
+          console.warn(
+            `⚠️ [WHATSAPP BOT] close · status=${statusCode} · msg="${err?.message}" · data=${JSON.stringify(err?.data || err?.output?.payload || {})}`
+          );
           this.isConnected = false;
           this.isConnecting = false;
 
@@ -71,7 +92,16 @@ export class BaileysClient {
             console.warn('⚠️ [WHATSAPP BOT] Logged out. Clearing session — re-pair from /bot-connect.');
             try { fs.rmSync(authDir, { recursive: true, force: true }); } catch { /* noop */ }
             this.reconnectAttempts = 0;
+            this.qrRaw = null;
             setTimeout(() => this.start(), 2_000);
+            return;
+          }
+
+          // 515 (restartRequired) fires right after a successful QR scan — it's expected,
+          // reconnect immediately and don't count it against the retry budget.
+          if (statusCode === DisconnectReason.restartRequired) {
+            console.log('🔄 [WHATSAPP BOT] Restart required after pairing — reconnecting…');
+            setTimeout(() => this.start(), 1_000);
             return;
           }
 

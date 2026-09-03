@@ -42,6 +42,7 @@ router.post('/payments/create-order', optionalAuthMiddleware, PaymentController.
 router.post('/payments/webhook', PaymentController.webhook);
 router.get('/payments/methods', PaymentController.getPaymentMethods);
 router.get('/payments/bancard/return', PaymentController.bancardReturn);
+router.post('/payments/:ref/dev-confirm', PaymentController.devConfirm);
 router.get('/payments/:ref', PaymentController.getOrder);
 
 // Data Portability & Export (Encrypted ZIP with PIN)

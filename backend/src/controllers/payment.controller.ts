@@ -106,6 +106,18 @@ export class PaymentController {
     res.json({ success: true, message: 'Pago acreditado y Bio-Pass activado' });
   }
 
+  /** DEV ONLY — mark an order paid without a real gateway (used by the /checkout "simulate" button). */
+  public static async devConfirm(req: Request, res: Response): Promise<void> {
+    if (config.env !== 'development') {
+      res.status(404).json({ error: 'Not found' });
+      return;
+    }
+    const ok = await PaymentService.handlePaymentSuccess(req.params.ref);
+    res.status(ok ? 200 : 404).json(
+      ok ? { success: true, message: 'Pago simulado — Bio-Pass activado' } : { error: 'Orden no encontrada o ya pagada' }
+    );
+  }
+
   /** Bancard hits this (GET, browser redirect) after the hosted checkout. We verify then activate. */
   public static async bancardReturn(req: Request, res: Response): Promise<void> {
     const ref = String(req.query.ref || '');

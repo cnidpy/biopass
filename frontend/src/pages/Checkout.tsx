@@ -235,6 +235,18 @@ export const Checkout: React.FC = () => {
           <p className="text-center text-[11px] text-slate-500 flex items-center justify-center gap-1.5">
             <Loader2 className="w-3 h-3 animate-spin" /> Esperando confirmación del pago…
           </p>
+
+          {import.meta.env.DEV && (
+            <button
+              onClick={async () => {
+                await api.post(`/payments/${encodeURIComponent(order.referenceCode)}/dev-confirm`, {}).catch(() => {});
+                fetchOrder();
+              }}
+              className="w-full py-2.5 rounded-xl border border-dashed border-emerald-500/40 bg-emerald-500/5 text-emerald-300 text-xs font-semibold hover:bg-emerald-500/10 transition-colors"
+            >
+              🧪 Simular pago (solo desarrollo)
+            </button>
+          )}
         </>
       )}
 
