@@ -18,7 +18,7 @@
   },
   "dependencies": {
     "@prisma/client": "^6.4.1",
-    "@whiskeysockets/baileys": "^6.7.19",
+    "@whiskeysockets/baileys": "^6.7.24",
     "archiver": "^7.0.1",
     "archiver-zip-encrypted": "^1.0.8",
     "axios": "^1.7.9",

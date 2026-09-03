@@ -37,8 +37,10 @@ export class BaileysClient {
 
       const { state, saveCreds } = await useMultiFileAuthState(authDir);
 
-      // WHATSAPP_LOG_LEVEL=debug|info|warn|error|silent (default: warn, to surface pairing failures)
-      const logger = pino({ level: process.env.WHATSAPP_LOG_LEVEL || 'warn' });
+      // Baileys' internal logger. Default 'silent' — it floods "failed to decrypt message"
+      // for history-sync artifacts that don't affect inbound handling. Our own
+      // connection.update logging below is independent. Set WHATSAPP_LOG_LEVEL=warn to debug.
+      const logger = pino({ level: process.env.WHATSAPP_LOG_LEVEL || 'silent' });
 
       // Announce the CURRENT WhatsApp Web protocol version — WhatsApp servers
       // terminate connections that claim an outdated version ("Connection Terminated by Server").
@@ -128,14 +130,16 @@ export class BaileysClient {
         }
       });
 
-      // Handle inbound messages
+      // Handle inbound messages — 1:1 DMs only
       this.sock.ev.on('messages.upsert', async (m) => {
         if (m.type !== 'notify') return;
 
         for (const msg of m.messages) {
-          if (!msg.key.fromMe && msg.key.remoteJid) {
-            await this.processIncomingMessage(msg);
-          }
+          if (!msg.key || msg.key.fromMe) continue;
+          const jid = msg.key.remoteJid || '';
+          // Ignore groups, channels/newsletters, broadcast lists and status updates
+          if (!jid.endsWith('@s.whatsapp.net')) continue;
+          await this.processIncomingMessage(msg);
         }
       });
     } catch (err) {
@@ -145,8 +149,15 @@ export class BaileysClient {
   }
 
   private async processIncomingMessage(msg: proto.IWebMessageInfo): Promise<void> {
-    const remoteJid = msg.key.remoteJid!;
-    const rawPhone = remoteJid.replace('@s.whatsapp.net', '').replace('@g.us', '');
+    const remoteJid = msg.key.remoteJid || '';
+    // remoteJid here is always "<phone>@s.whatsapp.net" (filtered in messages.upsert)
+    const rawPhone = remoteJid.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
+
+    // Sanity: a real MSISDN is 7-15 digits. Anything else = LID / channel artifact → ignore.
+    if (!/^\d{7,15}$/.test(rawPhone)) {
+      console.warn(`[WHATSAPP BOT] Ignoring message from non-phone JID: ${remoteJid}`);
+      return;
+    }
 
     // Extract text
     const body =
@@ -223,7 +234,11 @@ export class BaileysClient {
    * Sends a plain text WhatsApp message
    */
   public async sendMessage(toPhone: string, text: string): Promise<boolean> {
-    const cleanPhone = toPhone.replace(/[^0-9]/g, '');
+    const cleanPhone = (toPhone || '').replace(/[^0-9]/g, '');
+    if (!/^\d{7,15}$/.test(cleanPhone)) {
+      console.warn(`[WHATSAPP BOT] Refusing to send to invalid number "${toPhone}"`);
+      return false;
+    }
     const jid = `${cleanPhone}@s.whatsapp.net`;
 
     console.log(`\n📨 [WHATSAPP OUTBOUND -> ${cleanPhone}]:\n${text}\n----------------------------------`);
@@ -251,7 +266,11 @@ export class BaileysClient {
     mimetype = 'application/pdf',
     caption?: string
   ): Promise<boolean> {
-    const cleanPhone = toPhone.replace(/[^0-9]/g, '');
+    const cleanPhone = (toPhone || '').replace(/[^0-9]/g, '');
+    if (!/^\d{7,15}$/.test(cleanPhone)) {
+      console.warn(`[WHATSAPP BOT] Refusing to send document to invalid number "${toPhone}"`);
+      return false;
+    }
     const jid = `${cleanPhone}@s.whatsapp.net`;
 
     console.log(`📎 [WHATSAPP ATTACHMENT -> ${cleanPhone}]: Document ${fileName} (${buffer.length} bytes)`);
