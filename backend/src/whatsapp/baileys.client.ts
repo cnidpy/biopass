@@ -107,6 +107,23 @@ export class BaileysClient {
             return;
           }
 
+          // 428 = WhatsApp rate-limited this number for too many linked-device attempts.
+          // Hammering it makes the throttle worse — back off hard and stop after a couple tries.
+          if (statusCode === 428) {
+            this.reconnectAttempts += 1;
+            if (this.reconnectAttempts >= 3) {
+              this.gaveUp = true;
+              console.warn(
+                '⚠️ [WHATSAPP BOT] WhatsApp está limitando este número (428). ' +
+                  'Esperá 20-30 min, cerrá dispositivos vinculados viejos, y luego POST /api/bot/reconnect.'
+              );
+              return;
+            }
+            console.warn(`⚠️ [WHATSAPP BOT] Rate-limited (428). Retry ${this.reconnectAttempts}/3 in 5 min.`);
+            setTimeout(() => this.start(), 5 * 60_000);
+            return;
+          }
+
           this.reconnectAttempts += 1;
           if (this.reconnectAttempts > config.whatsappMaxReconnect) {
             this.gaveUp = true;
