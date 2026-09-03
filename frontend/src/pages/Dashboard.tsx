@@ -5,6 +5,7 @@ import { QRCodeSVG } from 'qrcode.react';
 import { ShieldCheck, HeartPulse, QrCode, FileText, Upload, Download, ExternalLink, Activity, Plus, Loader2 } from 'lucide-react';
 import { PinModal } from '../components/PinModal';
 import { PushOptIn } from '../components/PushOptIn';
+import { VaultInit } from '../components/VaultInit';
 
 export const Dashboard: React.FC = () => {
   const [user, setUser] = useState<any>(null);
@@ -124,6 +125,9 @@ export const Dashboard: React.FC = () => {
           </a>
         </div>
       )}
+
+      {/* First web login: move encryption client-side */}
+      <VaultInit />
 
       {/* Browser push opt-in — emergency scans also arrive here */}
       <PushOptIn />

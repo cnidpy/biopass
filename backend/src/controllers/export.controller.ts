@@ -1,6 +1,8 @@
 import { Request, Response } from 'express';
 import { AuthenticatedRequest } from '../security/jwt';
 import { ExportService } from '../services/export.service';
+import { EmailService } from '../services/email.service';
+import { prisma } from '../database/prisma';
 import path from 'path';
 import fs from 'fs';
 import { config } from '../config';
@@ -20,12 +22,29 @@ export class ExportController {
 
     try {
       const result = await ExportService.generateFullDataExport(req.user.userId, pin);
+
+      // Email the download link (best-effort)
+      const u = await prisma.user.findUnique({
+        where: { id: req.user.userId },
+        select: { email: true, fullName: true },
+      });
+      let emailed = false;
+      if (u?.email) {
+        const r = await EmailService.sendVaultBackup(u.email, {
+          fullName: u.fullName || '',
+          downloadUrl: result.downloadUrl,
+          expiresAt: new Date(result.expiresAt),
+        }).catch(() => ({ status: 'FAILED' as const }));
+        emailed = r.status === 'SENT';
+      }
+
       res.json({
         success: true,
         message: 'Archivo ZIP cifrado generado con éxito. Expira en 24 horas.',
         downloadUrl: result.downloadUrl,
         expiresAt: result.expiresAt,
         filename: result.filename,
+        emailed,
       });
     } catch (err: any) {
       res.status(400).json({ error: err.message || 'Error generando exportación' });

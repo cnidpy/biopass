@@ -91,6 +91,10 @@ export class BotStateMachine {
 
     const state = user.onboardingState;
 
+    // Bilingual helper — Guaraní/Jopará for GN users, Spanish otherwise.
+    const lang: 'es' | 'gn' = user.language === 'GN' ? 'gn' : 'es';
+    const tr = (es: string, gn: string) => (lang === 'gn' ? gn : es);
+
     // Reset command: If user types "REINICIAR" or "MENU"
     if (cleanText.toUpperCase() === 'REINICIAR') {
       await updateState('STEP1_WELCOME', {});
@@ -125,34 +129,46 @@ export class BotStateMachine {
 
     // STEP 2: DOCUMENT UPLOAD & OCR
     if (state === 'STEP2_DOCUMENT') {
-      let extractedName = 'JUAN CARLOS SILVA';
-      let extractedCi = '4892310';
+      let extractedName = '';
+      let extractedCi = '';
       let ciPhotoUrl = '';
 
       if (msg.mediaBuffer) {
         const saved = await StorageService.saveFile('ci_documents', `ci_${user.id}_${Date.now()}.jpg`, msg.mediaBuffer);
         ciPhotoUrl = saved.fileUrl;
         const ocrResult = await OcrAiService.processCiImage(msg.mediaBuffer, msg.mediaFilename || 'ci.jpg');
-        extractedName = ocrResult.fullName || extractedName;
-        extractedCi = ocrResult.ciNumber || extractedCi;
+        extractedName = (ocrResult.fullName || '').trim();
+        extractedCi = (ocrResult.ciNumber || '').trim();
       } else {
-        // Manual input fallback: "Nombre, CI"
+        // Manual input: "Nombre, CI"
         const parts = cleanText.split(/[,:-]/);
         if (parts.length >= 2) {
           extractedName = parts[0].trim();
           extractedCi = parts[1].replace(/[^0-9]/g, '');
         } else {
-          extractedName = cleanText;
+          extractedName = cleanText.trim();
         }
+      }
+
+      // Couldn't read anything usable — ask the user to type it
+      if (!extractedName || !extractedCi) {
+        await updateState('STEP2_DOCUMENT', {}, {});
+        return {
+          replyText:
+            `😕 No pude leer con claridad ${!extractedName && !extractedCi ? 'tus datos' : !extractedName ? 'tu nombre' : 'tu número de cédula'}.\n\n` +
+            `Escribí tu *Nombre Completo y Número de Cédula* separados por coma:\n` +
+            `_Ejemplo: Carlos Benítez, 3500200_`,
+        };
       }
 
       await updateState('STEP2_CONFIRM_CI', { extractedName, extractedCi, ciPhotoUrl });
 
       return {
-        replyText: `🔍 *Datos detectados por OCR:*\n\n` +
+        replyText:
+          `🔍 *Datos detectados:*\n\n` +
           `👤 *Nombre:* ${extractedName}\n` +
           `🆔 *Cédula:* ${extractedCi}\n\n` +
-          `¿Son correctos estos datos?\n` +
+          `¿Son correctos?\n` +
           `*[1]* Sí, continuar ✅\n` +
           `*[2]* No, corregir manualmente ✏️`,
       };
@@ -169,10 +185,16 @@ export class BotStateMachine {
         });
 
         return {
-          replyText: `✅ *Identidad registrada exitosamente.*\n\n` +
-            `🚨 *Paso 3/8 (Contacto de Emergencia):*\n` +
-            `Escribe el nombre y número de teléfono de la persona a quien debemos avisar si te pasa algo.\n\n` +
-            `_Ejemplo: Maria Perez, 0981-123-456 (Madre)_`,
+          replyText: tr(
+            `✅ *Identidad registrada.*\n\n` +
+              `🚨 *Paso 3/8 (Contacto de Emergencia):*\n` +
+              `Escribí el nombre y teléfono de la persona a quien debemos avisar si te pasa algo.\n\n` +
+              `_Ejemplo: María Pérez, 0981-123-456 (Madre)_`,
+            `✅ *Nde identidad oñeguarda.*\n\n` +
+              `🚨 *Paso 3/8 (Contacto de Emergencia):*\n` +
+              `Ehai téra ha teléfono pe persóna romomarandúva'erãva oĩ ramo mba'e ndéve.\n\n` +
+              `_Techapyrã: María Pérez, 0981-123-456 (Sy)_`
+          ),
         };
       } else {
         await updateState('STEP2_DOCUMENT');
@@ -203,10 +225,16 @@ export class BotStateMachine {
       await updateState('STEP4_ADDRESS', { contactName, contactPhone });
 
       return {
-        replyText: `✅ *Contacto de emergencia guardado:* ${contactName} (${contactPhone})\n\n` +
-          `🏠 *Paso 4/8 (Domicilio):*\n` +
-          `Escribe tu dirección exacta (Calle, número de casa, barrio y ciudad).\n\n` +
-          `_Ejemplo: Avda. Mariscal Lopez 1234, Barrio Villa Morra, Asunción_`,
+        replyText: tr(
+          `✅ *Contacto de emergencia guardado:* ${contactName} (${contactPhone})\n\n` +
+            `🏠 *Paso 4/8 (Domicilio):*\n` +
+            `Escribe tu dirección exacta (calle, número de casa, barrio y ciudad).\n\n` +
+            `_Ejemplo: Avda. Mariscal López 1234, Barrio Villa Morra, Asunción_`,
+          `✅ *Nde contacto de emergencia oñeguarda:* ${contactName} (${contactPhone})\n\n` +
+            `🏠 *Paso 4/8 (Nde róga renda):*\n` +
+            `Ehai nde dirección exacta (calle, tapỹi papapy, barrio ha táva).\n\n` +
+            `_Techapyrã: Avda. Mariscal López 1234, Barrio Villa Morra, Paraguay_`
+        ),
       };
     }
 
@@ -215,10 +243,16 @@ export class BotStateMachine {
       await updateState('STEP5_EMAIL', { address: cleanText }, { address: cleanText });
 
       return {
-        replyText: `✅ *Domicilio registrado.*\n\n` +
-          `📧 *Paso 5/8 (Correo Electrónico):*\n` +
-          `Ingresa tu correo electrónico para enviarte facturas, comprobantes y tu respaldo histórico.\n\n` +
-          `_Ejemplo: usuario@correo.com_`,
+        replyText: tr(
+          `✅ *Domicilio registrado.*\n\n` +
+            `📧 *Paso 5/8 (Correo Electrónico):*\n` +
+            `Ingresa tu correo electrónico para enviarte facturas, comprobantes y tu respaldo histórico.\n\n` +
+            `_Ejemplo: usuario@correo.com_`,
+          `✅ *Nde róga renda oñeguarda.*\n\n` +
+            `📧 *Paso 5/8 (Correo Electrónico):*\n` +
+            `Ehai nde correo electrónico romondo hagua ndéve factura, comprobante ha nde respaldo.\n\n` +
+            `_Techapyrã: puruhára@correo.com_`
+        ),
       };
     }
 
@@ -227,15 +261,18 @@ export class BotStateMachine {
       await updateState('STEP6_CONDITIONS', { email: cleanText }, { email: cleanText });
 
       return {
-        replyText: `✅ *Correo registrado:* ${cleanText}\n\n` +
-          `🩺 *Paso 6/8 (Datos Médicos Críticos de Emergencia):*\n` +
-          `Selecciona tus condiciones médicas preexistentes respondiendo con los números correspondientes separados por coma:\n\n` +
-          `*[1]* Diabetes\n` +
-          `*[2]* Epilepsia\n` +
-          `*[3]* Hipertensión Arterial\n` +
-          `*[4]* Marcapasos / Cardiopatía\n` +
-          `*[5]* Ninguna condición\n\n` +
-          `_Luego escribe también tus alergias severas (ej: "1, 3 - Alergia a Penicilina e Ibuprofeno")_`,
+        replyText: tr(
+          `✅ *Correo registrado:* ${cleanText}\n\n` +
+            `🩺 *Paso 6/8 (Datos Médicos Críticos de Emergencia):*\n` +
+            `Selecciona tus condiciones médicas preexistentes respondiendo con los números separados por coma:\n\n` +
+            `*[1]* Diabetes\n*[2]* Epilepsia\n*[3]* Hipertensión Arterial\n*[4]* Marcapasos / Cardiopatía\n*[5]* Ninguna condición\n\n` +
+            `_Luego escribe también tus alergias severas (ej: "1, 3 - Alergia a Penicilina e Ibuprofeno")_`,
+          `✅ *Nde correo oñeguarda:* ${cleanText}\n\n` +
+            `🩺 *Paso 6/8 (Nde mba'asy oĩva - Emergencia):*\n` +
+            `Eiporavo mba'asy reguerekóva, embohovái umi papapy coma rupive:\n\n` +
+            `*[1]* Diabetes\n*[2]* Epilepsia\n*[3]* Hipertensión\n*[4]* Marcapasos / Ñe'ãrasy\n*[5]* Mba'eve\n\n` +
+            `_Upéi ehai avei mba'épa nde alergia hatãva (techapyrã: "1, 3 - Alergia Penicilina ha Ibuprofeno")_`
+        ),
       };
     }
 
@@ -267,10 +304,16 @@ export class BotStateMachine {
       });
 
       return {
-        replyText: `✅ *Condiciones médicas y alergias registradas.*\n\n` +
-          `🔐 *Paso 7/8 (PIN de Seguridad Zero-Knowledge):*\n` +
-          `Crea un *PIN secreto de 4 dígitos* (Ej: 8492).\n\n` +
-          `🛡️ *Importante:* Este PIN será tu llave privada criptográfica. Ni nosotros ni los administradores podemos ver tus estudios médicos sin él.`,
+        replyText: tr(
+          `✅ *Condiciones médicas y alergias registradas.*\n\n` +
+            `🔐 *Paso 7/8 (PIN de Seguridad Zero-Knowledge):*\n` +
+            `Crea un *PIN secreto de 4 dígitos* (Ej: 8492).\n\n` +
+            `🛡️ *Importante:* este PIN es tu llave privada. Ni nosotros ni los administradores podemos ver tus estudios sin él.`,
+          `✅ *Nde mba'asy ha alergia oñeguarda.*\n\n` +
+            `🔐 *Paso 7/8 (PIN Seguridad Zero-Knowledge):*\n` +
+            `Emoheñói peteĩ *PIN ñemi 4 papapýgui* (Techapyrã: 8492).\n\n` +
+            `🛡️ *Iñimportánteva:* ko PIN ha'e nde llave privada. Ni ore ni administrador ndaikatúi rohecha nde estudio ndaipóri ramo.`
+        ),
       };
     }
 
@@ -279,7 +322,10 @@ export class BotStateMachine {
       const pinMatch = cleanText.match(/\b\d{4}\b/);
       if (!pinMatch) {
         return {
-          replyText: `⚠️ *El PIN debe contener exactamente 4 números.* Por favor, ingresa tu PIN de 4 dígitos (Ej: 1234):`,
+          replyText: tr(
+            `⚠️ *El PIN debe tener exactamente 4 números.* Ingresá tu PIN de 4 dígitos (Ej: 1234):`,
+            `⚠️ *PIN oguerekova'erã 4 papapy.* Ehai nde PIN 4 papapýgui (Techapyrã: 1234):`
+          ),
         };
       }
 
@@ -306,16 +352,20 @@ export class BotStateMachine {
       });
 
       return {
-        replyText: `🔒 *¡PIN de seguridad Cifrado con Éxito!*\n\n` +
-          `💳 *Paso 8/8 (Activación y Pago):*\n` +
-          `Selecciona tu país y plan para activar tu Bio-Pass y generar tu QR de rescate:\n\n` +
-          `🇵🇾 *Paraguay:*\n` +
-          `*[1]* Plan Mensual (Gs. 35.000 / mes)\n` +
-          `*[2]* Plan Anual (Gs. 300.000 / año - Descuento 30%)\n\n` +
-          `🇧🇷 *Brasil:*\n` +
-          `*[3]* Plano Mensal (R$ 25 / mês)\n` +
-          `*[4]* Plano Anual (R$ 220 / ano - Desconto 25%)\n\n` +
-          `_Responde con 1, 2, 3 o 4 para recibir el link de pago y código PIX / Alias._`,
+        replyText: tr(
+          `🔒 *¡PIN de seguridad cifrado con éxito!*\n\n` +
+            `💳 *Paso 8/8 (Activación y Pago):*\n` +
+            `Elegí tu país y plan para activar tu Bio-Pass y generar tu QR de rescate:\n\n` +
+            `🇵🇾 *Paraguay:*\n*[1]* Plan Mensual (Gs. 35.000 / mes)\n*[2]* Plan Anual (Gs. 300.000 / año · 30% off)\n\n` +
+            `🇧🇷 *Brasil:*\n*[3]* Plano Mensal (R$ 25 / mês)\n*[4]* Plano Anual (R$ 220 / ano · 25% off)\n\n` +
+            `_Respondé 1, 2, 3 o 4 para recibir el link de pago y el código PIX / Alias._`,
+          `🔒 *Nde PIN oñecifra porã!*\n\n` +
+            `💳 *Paso 8/8 (Activación ha Pago):*\n` +
+            `Eiporavo nde tetã ha plan remoañete hagua nde Bio-Pass ha emoheñói nde QR:\n\n` +
+            `🇵🇾 *Paraguay:*\n*[1]* Plan Mensual (Gs. 35.000 / mes)\n*[2]* Plan Anual (Gs. 300.000 / ary · 30% off)\n\n` +
+            `🇧🇷 *Brasil:*\n*[3]* Plano Mensal (R$ 25)\n*[4]* Plano Anual (R$ 220)\n\n` +
+            `_Embohovái 1, 2, 3 térã 4 rehupyty hagua link de pago ha código PIX / Alias._`
+        ),
       };
     }
 
@@ -414,13 +464,20 @@ export class BotStateMachine {
           },
         });
 
+        const engine =
+          studyOcr.source === 'ai+ocr' ? 'OCR + Inteligencia Artificial'
+          : studyOcr.source === 'ocr' ? 'OCR'
+          : 'almacenamiento seguro';
+        const findingsBlock = studyOcr.keyFindings.length
+          ? `\n📊 *Hallazgos:*\n${studyOcr.keyFindings.slice(0, 6).map((f) => `• ${f}`).join('\n')}\n`
+          : '';
         return {
-          replyText: `🩺 *¡ESTUDIO MÉDICO PROCESADO CON INTELIGENCIA ARTIFICIAL!*\n\n` +
+          replyText: `🩺 *ESTUDIO MÉDICO PROCESADO (${engine})*\n\n` +
             `📋 *Tipo:* ${studyOcr.title}\n` +
-            `📅 *Fecha:* ${new Date().toLocaleDateString()}\n` +
-            `🤖 *Resumen IA:* ${studyOcr.aiSummary}\n\n` +
-            `✅ El documento ha sido clasificado y subido a tu Bóveda Médica Cifrada en la nube.\n` +
-            `Solo tú y tu médico podrán verlo ingresando tu PIN en la plataforma web.`,
+            `📅 *Fecha:* ${(studyOcr.studyDate || new Date()).toLocaleDateString('es-PY')}\n` +
+            `🤖 *Resumen:* ${studyOcr.aiSummary}\n${findingsBlock}\n` +
+            `✅ Clasificado y subido a tu Bóveda Médica Cifrada.\n` +
+            `Solo vos y tu médico pueden verlo ingresando tu PIN en la plataforma web.`,
         };
       }
 

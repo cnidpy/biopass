@@ -18,7 +18,20 @@ const app = express();
 app.set('trust proxy', 1);
 
 // Middleware
-app.use(cors({ origin: '*' }));
+const corsOrigins = config.cors.origins;
+app.use(
+  cors({
+    origin:
+      corsOrigins.includes('*')
+        ? '*'
+        : (origin, cb) => {
+            // allow same-origin / curl / server-to-server (no Origin header) and any allow-listed origin
+            if (!origin || corsOrigins.includes(origin)) return cb(null, true);
+            cb(new Error(`Origen no permitido por CORS: ${origin}`));
+          },
+    credentials: !corsOrigins.includes('*'),
+  })
+);
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use('/api', globalLimiter);
@@ -55,11 +68,16 @@ async function bootstrap() {
   // 3. Initialize Subscription Lifecycle CRON
   CronService.init();
 
-  // 4. Report Web Push availability
+  // 4. Report Web Push availability + integrations
   console.log(
     PushService.enabled
       ? '🔔 Web Push (VAPID) enabled.'
       : '🔕 Web Push disabled — set VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY in .env to enable.'
+  );
+  console.log(`🌐 CORS: ${corsOrigins.includes('*') ? 'ALL (*)' : corsOrigins.join(', ')}`);
+  console.log(
+    `🧩 Integrations — OCR:${config.ocr.enabled ? 'on' : 'off'} · AI vision:${config.ai.provider} · ` +
+      `Email:${config.email.enabled ? 'SMTP' : 'log-only'} · Bancard:${config.bancard.enabled ? 'on' : 'off'} · PIX:${config.pix.psp}`
   );
 
   // 5. Start WhatsApp Bot (Baileys) in non-blocking mode

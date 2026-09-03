@@ -9,6 +9,7 @@ import { Payments } from './pages/Payments';
 import { AuditLogs } from './pages/AuditLogs';
 import { BotSimulator } from './pages/BotSimulator';
 import { BotConnect } from './pages/BotConnect';
+import { Checkout } from './pages/Checkout';
 import { EmergencyView } from './pages/EmergencyView';
 
 /** Redirects to /login when there is no session token. */
@@ -45,6 +46,7 @@ const App: React.FC = () => {
         <Route path="/login" element={<Login />} />
         <Route path="/bot-simulator" element={<BotSimulator />} />
         <Route path="/bot-connect" element={<BotConnect />} />
+        <Route path="/checkout" element={<Checkout />} />
 
         {/* Authenticated user panel */}
         <Route element={<RequireAuth />}>

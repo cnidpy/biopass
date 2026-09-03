@@ -35,16 +35,17 @@ export class ZeroKnowledgeSecurity {
   }
 
   /**
-   * Derives a 256-bit AES key from PIN + Salt using PBKDF2
+   * Derives a 256-bit AES key from PIN + Salt using PBKDF2.
+   * The salt is treated as raw bytes decoded from hex (matching the browser's
+   * Web Crypto derivation in frontend/src/utils/crypto.ts). A non-hex salt falls
+   * back to UTF-8 bytes for backward compatibility.
    */
   public static deriveKey(pin: string, salt: string): Buffer {
-    return crypto.pbkdf2Sync(
-      pin,
-      salt,
-      this.PBKDF2_ITERATIONS,
-      this.KEY_LENGTH,
-      this.DIGEST
-    );
+    const saltBuf =
+      /^[0-9a-fA-F]+$/.test(salt) && salt.length % 2 === 0
+        ? Buffer.from(salt, 'hex')
+        : Buffer.from(salt, 'utf8');
+    return crypto.pbkdf2Sync(pin, saltBuf, this.PBKDF2_ITERATIONS, this.KEY_LENGTH, this.DIGEST);
   }
 
   /**

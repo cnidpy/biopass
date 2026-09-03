@@ -51,13 +51,12 @@ export class OtpService {
     const delivered = await whatsappBot.sendMessage(cleanPhone, text);
     const botOnline = whatsappBot.getStatus().connected;
 
-    const devEcho = config.otp.devEcho && config.env === 'development';
-
     return {
       sent: delivered,
       channel: botOnline ? 'whatsapp' : 'log',
       expiresAt,
-      devCode: devEcho ? code : undefined,
+      // Populated whenever OTP_DEV_ECHO is on; the controller only exposes it in development.
+      devCode: config.otp.devEcho ? code : undefined,
     };
   }
 

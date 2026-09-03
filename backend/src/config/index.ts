@@ -31,6 +31,79 @@ export const config = {
   paymentWebhookSecret: process.env.PAYMENT_WEBHOOK_SECRET || '',
   whatsappMaxReconnect: parseInt(process.env.WHATSAPP_MAX_RECONNECT || '8', 10),
 
+  cors: {
+    // comma-separated allowlist; '*' keeps the permissive default
+    origins: (process.env.CORS_ORIGINS || process.env.FRONTEND_URL || '*')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean),
+  },
+
+  ocr: {
+    enabled: process.env.OCR_ENABLED !== 'false',
+    langs: process.env.OCR_LANGS || 'spa+eng',
+  },
+
+  ai: {
+    // 'openai' | 'gemini' | 'none' (auto-picks based on which key is set when unset)
+    visionProvider: (process.env.AI_VISION_PROVIDER || '').toLowerCase(),
+    openaiApiKey: process.env.OPENAI_API_KEY || '',
+    openaiModel: process.env.OPENAI_VISION_MODEL || 'gpt-4o-mini',
+    geminiApiKey: process.env.GEMINI_API_KEY || '',
+    geminiModel: process.env.GEMINI_VISION_MODEL || 'gemini-1.5-flash',
+    get provider(): 'openai' | 'gemini' | 'none' {
+      if (this.visionProvider === 'openai' || this.visionProvider === 'gemini' || this.visionProvider === 'none') {
+        return this.visionProvider;
+      }
+      if (this.openaiApiKey) return 'openai';
+      if (this.geminiApiKey) return 'gemini';
+      return 'none';
+    },
+  },
+
+  email: {
+    host: process.env.SMTP_HOST || '',
+    port: parseInt(process.env.SMTP_PORT || '587', 10),
+    secure: process.env.SMTP_SECURE === 'true',
+    user: process.env.SMTP_USER || '',
+    pass: process.env.SMTP_PASS || '',
+    from: process.env.EMAIL_FROM || 'Doorway Cortex Bio-Pass <no-reply@bio-pass.com>',
+    get enabled() {
+      return !!this.host;
+    },
+  },
+
+  bancard: {
+    publicKey: process.env.BANCARD_PUBLIC_KEY || '',
+    privateKey: process.env.BANCARD_PRIVATE_KEY || '',
+    env: (process.env.BANCARD_ENV || 'staging').toLowerCase(),
+    get baseUrl() {
+      return this.env === 'production'
+        ? 'https://vpos.infonet.com.py'
+        : 'https://vpos.infonet.com.py:8888';
+    },
+    get enabled() {
+      return !!(this.publicKey && this.privateKey);
+    },
+  },
+
+  tigoMoney: {
+    apiUrl: process.env.TIGO_MONEY_API_URL || '',
+    clientId: process.env.TIGO_MONEY_CLIENT_ID || '',
+    clientSecret: process.env.TIGO_MONEY_CLIENT_SECRET || '',
+    get enabled() {
+      return !!(this.apiUrl && this.clientId && this.clientSecret);
+    },
+  },
+
+  pix: {
+    // 'mercadopago' calls the real PSP; 'manual' emits a static BR Code payload (valid CRC16)
+    psp: (process.env.PIX_PSP || 'manual').toLowerCase(),
+    mercadopagoToken: process.env.MERCADOPAGO_ACCESS_TOKEN || '',
+    merchantName: (process.env.PIX_MERCHANT_NAME || 'DOORWAY CORTEX BIOPASS').toUpperCase(),
+    merchantCity: (process.env.PIX_MERCHANT_CITY || 'SAO PAULO').toUpperCase(),
+  },
+
   twilio: {
     accountSid: process.env.TWILIO_ACCOUNT_SID || 'AC_mock',
     authToken: process.env.TWILIO_AUTH_TOKEN || 'mock_token',

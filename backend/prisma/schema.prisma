@@ -44,6 +44,7 @@ enum PaymentGateway {
   MERCADOPAGO
   TIGO_MONEY
   PIX
+  BANCARD
   BANK_TRANSFER
 }
 
@@ -88,6 +89,7 @@ model User {
   pinHash               String?             // Verification hash of 4-digit PIN
   encryptionSalt        String?             // Salt for client-side PBKDF2/AES-256-GCM derivation
   encryptedMedicalBlob  String?             // Encrypted JSON with private consultation history
+  webVaultInitialized   Boolean             @default(false) // true once the blob was (re)encrypted client-side on first web login
   
   // Public Emergency Identification
   emergencyToken        String              @unique @default(uuid())
@@ -167,12 +169,15 @@ model PaymentOrder {
   gateway         PaymentGateway @default(MERCADOPAGO)
   paymentMethod   String         // ALIAS, PIX, LINK, QR, CARD
   referenceCode   String         @unique
-  pixPayload      String?        @db.Text
+  pixPayload      String?        @db.Text  // PIX "copia e cola" (BR Code, valid CRC16)
+  pixQrImage      String?        @db.Text  // data:image/png;base64 QR of the payload
   aliasInfo       String?        // Paraguay SIPAP / Alias Bancario
   paymentLink     String?
+  gatewayRef      String?        // external transaction id from the PSP / Bancard process_id
   amount          Float
   currency        String
   status          PaymentStatus  @default(PENDING)
+  expiresAt       DateTime?
   paidAt          DateTime?
   createdAt       DateTime       @default(now())
   updatedAt       DateTime       @updatedAt
@@ -222,6 +227,25 @@ model OtpCode {
   createdAt   DateTime   @default(now())
 
   @@index([phoneNumber, purpose])
+}
+
+enum EmailStatus {
+  SENT
+  FAILED
+  LOGGED
+}
+
+/// Audit trail of every transactional email (invoice, vault backup link, etc.).
+model EmailLog {
+  id        String      @id @default(uuid())
+  to        String
+  subject   String
+  template  String
+  status    EmailStatus @default(LOGGED)
+  error     String?
+  createdAt DateTime    @default(now())
+
+  @@index([to])
 }
 
 /// Web Push (VAPID) subscription created when a visitor opts in to browser notifications.

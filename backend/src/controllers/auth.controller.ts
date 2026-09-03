@@ -3,6 +3,7 @@ import { prisma } from '../database/prisma';
 import { generateToken, AuthenticatedRequest } from '../security/jwt';
 import { ZeroKnowledgeSecurity } from '../security/zero-knowledge';
 import { OtpService } from '../services/otp.service';
+import { config } from '../config';
 
 export class AuthController {
   /**
@@ -31,7 +32,8 @@ export class AuthController {
           : `Código generado para ${cleanPhone} (el bot de WhatsApp no está vinculado; revisá el log del servidor).`,
       expiresAt: dispatch.expiresAt,
       registered: !!user,
-      devOtp: dispatch.devCode, // undefined unless OTP_DEV_ECHO=true && NODE_ENV=development
+      // Only ever surfaced in development, even if OTP_DEV_ECHO is left on elsewhere.
+      devOtp: config.env === 'development' ? dispatch.devCode : undefined,
     });
   }
 

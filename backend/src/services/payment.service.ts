@@ -2,7 +2,10 @@ import { prisma } from '../database/prisma';
 import { config } from '../config';
 import { QrPdfService } from './qr-pdf.service';
 import { whatsappBot } from '../whatsapp/baileys.client';
-import { v4 as uuidv4 } from 'uuid';
+import { PushService } from './push.service';
+import { EmailService } from './email.service';
+import { PixService } from './pix.service';
+import { BancardService } from './bancard.service';
 
 export interface CreateOrderParams {
   userId: string;
@@ -14,31 +17,28 @@ export interface CreateOrderParams {
 
 export class PaymentService {
   /**
-   * Creates a payment order customized for Paraguay or Brasil
+   * Creates a payment order for Paraguay or Brasil.
+   * - PY: Bancard vPOS hosted checkout when configured, plus alias/transfer instructions as fallback.
+   * - BR: real Pix BR Code (valid CRC16) or Mercado Pago Pix charge.
+   * The `paymentLink` always points to the in-app /checkout page, which renders the right method.
    */
   public static async createPaymentOrder(params: CreateOrderParams) {
     const user = await prisma.user.findUnique({
       where: { id: params.userId },
       include: { organization: true },
     });
-
-    if (!user) {
-      throw new Error('User not found');
-    }
+    if (!user) throw new Error('User not found');
 
     const isPY = params.country === 'PARAGUAY';
     const currency = isPY ? 'PYG' : 'BRL';
     let baseAmount = isPY
-      ? (params.plan === 'ANNUAL' ? config.payments.planPrices.PY.ANNUAL : config.payments.planPrices.PY.MONTHLY)
-      : (params.plan === 'ANNUAL' ? config.payments.planPrices.BR.ANNUAL : config.payments.planPrices.BR.MONTHLY);
+      ? params.plan === 'ANNUAL' ? config.payments.planPrices.PY.ANNUAL : config.payments.planPrices.PY.MONTHLY
+      : params.plan === 'ANNUAL' ? config.payments.planPrices.BR.ANNUAL : config.payments.planPrices.BR.MONTHLY;
+    if (params.isFine) baseAmount += isPY ? config.payments.planPrices.PY.FINE : config.payments.planPrices.BR.FINE;
 
-    if (params.isFine) {
-      baseAmount += isPY ? config.payments.planPrices.PY.FINE : config.payments.planPrices.BR.FINE;
-    }
+    const shopProcessId = Date.now().toString();
+    const referenceCode = `BIO-${shopProcessId}-${Math.floor(1000 + Math.random() * 9000)}`;
 
-    const referenceCode = `BIO-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
-
-    // Generate Subscription record
     const expiryDays = params.plan === 'ANNUAL' ? 365 : 30;
     const expiryDate = new Date();
     expiryDate.setDate(expiryDate.getDate() + expiryDays);
@@ -57,30 +57,74 @@ export class PaymentService {
       },
     });
 
-    // Generate payment details
+    const checkoutLink = `${config.frontendUrl}/checkout?ref=${referenceCode}`;
     let aliasInfo: string | undefined;
     let pixPayload: string | undefined;
-    const paymentLink = `${config.frontendUrl}/checkout?ref=${referenceCode}`;
+    let pixQrImage: string | undefined;
+    let gatewayRef: string | undefined;
+    let gateway: 'MERCADOPAGO' | 'PIX' | 'BANCARD' | 'BANK_TRANSFER' = isPY ? 'BANK_TRANSFER' : 'PIX';
+    let paymentMethod = isPY ? 'ALIAS / TRANSFERENCIA' : 'PIX';
+    let externalRedirect: string | undefined;
+    let orderExpiry: Date | undefined;
 
     if (isPY) {
-      aliasInfo = `BANCO: ${config.payments.paraguayBank}\nALIAS SIPAP: ${config.payments.paraguayAlias}\nBILLETERA TIGO MONEY: ${config.payments.paraguayTigoWallet}\nTITULAR: DOORWAY CORTEX BIO-PASS PY\nREF: ${referenceCode}`;
+      // Always provide the manual transfer instructions
+      aliasInfo =
+        `BANCO: ${config.payments.paraguayBank}\n` +
+        `ALIAS SIPAP: ${config.payments.paraguayAlias}\n` +
+        `BILLETERA TIGO MONEY: ${config.payments.paraguayTigoWallet}\n` +
+        `TITULAR: DOORWAY CORTEX BIO-PASS PY\n` +
+        `REF: ${referenceCode}`;
+
+      if (BancardService.enabled) {
+        try {
+          const checkout = await BancardService.createCheckout({
+            shopProcessId,
+            amount: baseAmount,
+            currency: 'PYG',
+            description: `Bio-Pass ${params.plan}`,
+            returnUrl: `${config.baseUrl}/api/payments/bancard/return?ref=${referenceCode}`,
+            cancelUrl: `${checkoutLink}&status=cancel`,
+          });
+          gateway = 'BANCARD';
+          paymentMethod = 'CARD / QR (Bancard)';
+          gatewayRef = checkout.processId;
+          externalRedirect = checkout.redirectUrl;
+        } catch (err: any) {
+          console.warn('[payment] Bancard checkout failed, using transfer instructions only:', err?.message);
+        }
+      }
     } else {
-      pixPayload = `00020126580014BR.GOV.BCB.PIX0136${config.payments.brasilPixKey}520400005303986540${baseAmount}.005802BR5925DOORWAY CORTEX BIOPASS6009SAO PAULO62070503***6304`;
+      const pix = await PixService.createCharge({
+        amountBRL: baseAmount,
+        txid: referenceCode.replace(/[^A-Za-z0-9]/g, '').slice(0, 25),
+        description: `Bio-Pass ${params.plan}`,
+        payerEmail: user.email || undefined,
+      });
+      pixPayload = pix.payload;
+      pixQrImage = pix.qrImage;
+      gatewayRef = pix.gatewayRef;
+      gateway = pix.provider === 'mercadopago' ? 'MERCADOPAGO' : 'PIX';
+      paymentMethod = pix.provider === 'mercadopago' ? 'PIX (Mercado Pago)' : 'PIX';
+      orderExpiry = pix.expiresAt;
     }
 
     const paymentOrder = await prisma.paymentOrder.create({
       data: {
         userId: user.id,
         subscriptionId: subscription.id,
-        gateway: isPY ? 'MERCADOPAGO' : 'PIX',
-        paymentMethod: isPY ? 'ALIAS / TRANSFERENCIA / LINK' : 'PIX / LINK',
+        gateway,
+        paymentMethod,
         referenceCode,
         amount: baseAmount,
         currency,
         status: 'PENDING',
         aliasInfo,
         pixPayload,
-        paymentLink,
+        pixQrImage,
+        gatewayRef,
+        paymentLink: externalRedirect || checkoutLink,
+        expiresAt: orderExpiry,
       },
     });
 
@@ -90,63 +134,76 @@ export class PaymentService {
       amount: baseAmount,
       currency,
       formattedAmount: isPY ? `Gs. ${baseAmount.toLocaleString('es-PY')}` : `R$ ${baseAmount.toFixed(2)}`,
-      paymentLink,
+      plan: params.plan,
+      country: isPY ? 'PARAGUAY' : 'BRASIL',
+      gateway,
+      paymentMethod,
+      checkoutUrl: checkoutLink,
+      paymentLink: externalRedirect || checkoutLink,
+      externalRedirect,
       aliasInfo,
       pixPayload,
+      pixQrImage,
       pixKey: config.payments.brasilPixKey,
+      expiresAt: orderExpiry,
+    };
+  }
+
+  /** Public view of an order for the /checkout page. */
+  public static async getOrderPublic(referenceCode: string) {
+    const order = await prisma.paymentOrder.findUnique({
+      where: { referenceCode },
+      include: { subscription: true, user: { select: { fullName: true, email: true } } },
+    });
+    if (!order) return null;
+    const isPY = order.currency === 'PYG';
+    return {
+      referenceCode: order.referenceCode,
+      status: order.status,
+      gateway: order.gateway,
+      paymentMethod: order.paymentMethod,
+      amount: order.amount,
+      currency: order.currency,
+      formattedAmount: isPY ? `Gs. ${order.amount.toLocaleString('es-PY')}` : `R$ ${order.amount.toFixed(2)}`,
+      plan: order.subscription?.plan,
+      aliasInfo: order.aliasInfo,
+      pixPayload: order.pixPayload,
+      pixQrImage: order.pixQrImage,
+      pixKey: config.payments.brasilPixKey,
+      externalRedirect: order.paymentLink?.startsWith('http') && !order.paymentLink.includes('/checkout') ? order.paymentLink : undefined,
+      expiresAt: order.expiresAt,
+      customerName: order.user?.fullName,
     };
   }
 
   /**
-   * Webhook handler confirming payment -> Activates account, generates QR & Sticker PDF and dispatches via WhatsApp
+   * Webhook / confirmation handler — activates the account, generates QR + sticker PDF,
+   * emails the invoice and pushes the confirmation over WhatsApp + Web Push.
    */
   public static async handlePaymentSuccess(referenceCode: string): Promise<boolean> {
-    console.log(`💳 Processing Payment Success Webhook for Ref: ${referenceCode}`);
-
     const order = await prisma.paymentOrder.findUnique({
       where: { referenceCode },
-      include: {
-        user: {
-          include: { organization: true },
-        },
-        subscription: true,
-      },
+      include: { user: { include: { organization: true } }, subscription: true },
     });
+    if (!order || order.status === 'PAID') return false;
 
-    if (!order || order.status === 'PAID') {
-      return false;
-    }
-
-    // Update order status
     await prisma.paymentOrder.update({
       where: { id: order.id },
-      data: {
-        status: 'PAID',
-        paidAt: new Date(),
-      },
+      data: { status: 'PAID', paidAt: new Date() },
     });
 
-    // Update subscription status
     if (order.subscriptionId) {
       await prisma.subscription.update({
         where: { id: order.subscriptionId },
-        data: {
-          status: 'ACTIVE',
-          finePending: false,
-        },
+        data: { status: 'ACTIVE', finePending: false, lastNotification: 'NONE' },
       });
     }
 
-    // Activate User
     const updatedUser = await prisma.user.update({
       where: { id: order.userId },
-      data: {
-        status: 'ACTIVE',
-        onboardingState: 'ACTIVE_MEMBER',
-      },
+      data: { status: 'ACTIVE', onboardingState: 'ACTIVE_MEMBER' },
     });
 
-    // Generate Sticker PDF
     const sticker = await QrPdfService.generateStickerPdf({
       emergencyToken: updatedUser.emergencyToken,
       userName: updatedUser.fullName || 'Usuario Bio-Pass',
@@ -155,25 +212,39 @@ export class PaymentService {
     });
 
     const emergencyUrl = `${config.publicEmergencyBaseUrl}/${updatedUser.emergencyToken}`;
+    const isPY = order.currency === 'PYG';
+    const amountFormatted = isPY ? `Gs. ${order.amount.toLocaleString('es-PY')}` : `R$ ${order.amount.toFixed(2)}`;
 
-    // Dispatch WhatsApp confirmation + Sticker PDF
-    const welcomeMsg = `🎉 *¡PAGO CONFIRMADO Y SERVICIO ACTIVADO!*\n\n` +
+    // Invoice email (best-effort)
+    if (updatedUser.email) {
+      EmailService.sendInvoice(updatedUser.email, {
+        fullName: updatedUser.fullName || '',
+        plan: order.subscription?.plan || '—',
+        amountFormatted,
+        referenceCode,
+        paidAt: new Date(),
+        emergencyUrl,
+      }).catch((e) => console.error('[payment] invoice email failed:', e?.message));
+    }
+
+    // Push confirmation (best-effort)
+    PushService.sendToUser(updatedUser.id, {
+      title: '✅ Pago confirmado — Bio-Pass activo',
+      body: `${amountFormatted} · ${order.subscription?.plan || ''}. Tu QR de rescate ya está activo.`,
+      tag: 'biopass-payment',
+      url: '/dashboard',
+    }).catch(() => {});
+
+    const welcomeMsg =
+      `🎉 *¡PAGO CONFIRMADO Y SERVICIO ACTIVADO!*\n\n` +
       `Bienvenido a *Doorway Cortex Bio-Pass*, ${updatedUser.fullName || ''}.\n\n` +
-      `✅ Tu código de emergencia ya está activo en la red global.\n` +
+      `✅ Tu código de emergencia ya está activo.\n` +
       `🌐 *Tu enlace público:* ${emergencyUrl}\n\n` +
       `📄 *Descarga tu Kit de Stickers (3x3 cm):*\n${sticker.fileUrl}\n\n` +
-      `💡 *Recomendaciones de impresión:*\n` +
-      `• Imprime el PDF en *papel Contact (vinilo adhesivo laminado resistente al agua)*.\n` +
-      `• Pega un sticker en la parte trasera de tu celular 📱, en tu casco de seguridad 👷, o en tu billetera/carnet 💼.\n\n` +
-      `⚙️ *Menú Principal Bio-Pass:*\n` +
-      `Envía:\n` +
-      `*[1]* Para subir un nuevo estudio médico (Foto/PDF)\n` +
-      `*[2]* Para actualizar tu perfil de emergencia\n` +
-      `*[3]* Para volver a descargar tu QR y Stickers\n` +
-      `*[4]* Para contactar a soporte técnico`;
+      (updatedUser.email ? `📧 Te enviamos el comprobante a ${updatedUser.email}.\n\n` : '') +
+      `⚙️ *Menú:* enviá *1* subir estudio · *2* editar perfil · *3* descargar QR · *4* soporte`;
 
     await whatsappBot.sendMessage(updatedUser.phoneNumber, welcomeMsg);
-
     return true;
   }
 }

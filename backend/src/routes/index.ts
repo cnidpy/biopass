@@ -8,6 +8,7 @@ import { ExportController } from '../controllers/export.controller';
 import { StickerController } from '../controllers/sticker.controller';
 import { BotController } from '../controllers/bot.controller';
 import { PushController } from '../controllers/push.controller';
+import { VaultController } from '../controllers/vault.controller';
 import { authMiddleware, optionalAuthMiddleware } from '../security/jwt';
 import { authLimiter, otpRequestLimiter, emergencyLimiter } from '../security/rate-limit';
 
@@ -27,15 +28,21 @@ router.get('/emergency/:token', emergencyLimiter, EmergencyController.getEmergen
 router.post('/emergency/:token/consultation', emergencyLimiter, EmergencyController.unlockConsultationMode);
 router.post('/emergency/:token/call-contact', emergencyLimiter, EmergencyController.callEmergencyContact);
 
+// Zero-Knowledge vault (client-side re-encryption on first web login)
+router.get('/vault/status', authMiddleware, VaultController.status);
+router.post('/vault/reinitialize', authMiddleware, VaultController.reinitialize);
+
 // Medical Vault & Studies
 router.get('/medical/studies', authMiddleware, MedicalController.getStudies);
 router.post('/medical/studies/upload', authMiddleware, upload.single('file'), MedicalController.uploadStudy);
 router.put('/medical/profile', authMiddleware, MedicalController.updateProfile);
 
 // Payments & Subscriptions
-router.post('/payments/create-order', PaymentController.createOrder);
+router.post('/payments/create-order', optionalAuthMiddleware, PaymentController.createOrder);
 router.post('/payments/webhook', PaymentController.webhook);
 router.get('/payments/methods', PaymentController.getPaymentMethods);
+router.get('/payments/bancard/return', PaymentController.bancardReturn);
+router.get('/payments/:ref', PaymentController.getOrder);
 
 // Data Portability & Export (Encrypted ZIP with PIN)
 router.post('/export/full-vault', authMiddleware, ExportController.createFullExport);

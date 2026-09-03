@@ -55,6 +55,48 @@ export class ClientCrypto {
     return bytes.buffer;
   }
 
+  private static arrayBufferToBase64(buf: ArrayBuffer): string {
+    const bytes = new Uint8Array(buf);
+    let bin = '';
+    for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+    return window.btoa(bin);
+  }
+
+  /** Fresh random salt (hex) generated in the browser — never derived from anything the server sent. */
+  public static generateSaltHex(bytes = 16): string {
+    const arr = new Uint8Array(bytes);
+    window.crypto.getRandomValues(arr);
+    return Array.from(arr).map((b) => b.toString(16).padStart(2, '0')).join('');
+  }
+
+  /**
+   * Encrypts a JSON-serializable value with AES-256-GCM using a key derived from PIN + saltHex.
+   * Output envelope matches the server's ZeroKnowledgeSecurity format: { iv, authTag, ciphertext } (all base64).
+   */
+  public static async encryptMedicalBlob(data: unknown, pin: string, saltHex: string): Promise<string> {
+    const key = await this.deriveKey(pin, saltHex);
+    const iv = window.crypto.getRandomValues(new Uint8Array(12));
+    const plaintext = new TextEncoder().encode(typeof data === 'string' ? data : JSON.stringify(data));
+
+    const encrypted = await window.crypto.subtle.encrypt(
+      { name: 'AES-GCM', iv, tagLength: 128 },
+      key,
+      plaintext
+    );
+
+    // Web Crypto appends the 16-byte auth tag at the end of the ciphertext; split it out
+    const full = new Uint8Array(encrypted);
+    const tagLen = 16;
+    const ciphertext = full.slice(0, full.length - tagLen);
+    const authTag = full.slice(full.length - tagLen);
+
+    return JSON.stringify({
+      iv: this.arrayBufferToBase64(iv.buffer),
+      authTag: this.arrayBufferToBase64(authTag.buffer),
+      ciphertext: this.arrayBufferToBase64(ciphertext.buffer),
+    });
+  }
+
   /**
    * Decrypts AES-256-GCM encrypted payload on the browser client
    */
